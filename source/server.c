@@ -5,11 +5,11 @@
 #include <sys/types.h>
 #include <arpa/inet.h> 
 #include <unistd.h>
-
+#include <signal.h>
 
 typedef struct messaggio messaggio;
 struct messaggio {
-	int id_messaggio;
+	char id_messaggio[4];
 	char mittente[32];
 	char destinatario[32];
 	char oggetto[64];
@@ -21,9 +21,8 @@ int requestLogin(char *username, char *password);
 void sendMessage(int socket_to);
 void delMessage(int socket_to);
 void getMessagesByUser(int socket_to);
-struct messaggio structFromRead(int write_socket);
-void writeFromStruct(int write_socket, messaggio msg);
 int query_id();
+void sigpipeHandler();
 
 char current_user[32];
 
@@ -93,70 +92,79 @@ int main(int argc, char *argv[])
 			char username[32];
 			char password[32];
 
-			int scelta = 0;
-			int esito;
-
+			char scelta[2];
+			strcpy(scelta, "0");
+			char esito[2];
+			strcpy(esito, "0");
 
 			// Ciclo per autenticazione/registrazione
 			printf("In attesa di autenticazione \n");
 			while (1)
 			{
-				read(connection_socket, &scelta, sizeof(int));
+				printf("Leggo la scelta");
+				read(connection_socket, scelta, 1);
+				printf("scelta - %s -", scelta);
+
 
 				printf("Attendo username\n");
 				read(connection_socket, username, 32);
+				printf("Username: %s", username);
+
 				printf("Attendo password\n");
 				read(connection_socket, password, 32);
-				printf("Username: %s", username);
 				printf("\nPassword: %s", password);
+	
+
 				
-				if (scelta == 1){
+				if ( strcmp(scelta, "1") == 0){
 					if ( !requestLogin(username, password) ) {
-						esito = 0;
-						write(connection_socket, &esito, sizeof(int));
+						
+						strcpy(esito, "0");
+						write(connection_socket, esito, 1);
 					} else { break;	}
-				} else if (scelta == 2) {
+				} else if ( strcmp(scelta, "2") == 0) {
 					if ( !registerUser(username, password) ) {
-						esito = 0;
-						write(connection_socket, &esito, sizeof(int));
+						strcpy(esito, "0");
+						write(connection_socket, esito, 1);
 					} else { break; }
 				}
-				scelta = 0;
+				strcpy(scelta, "0");
 
 			}
-			esito = 1;
-			write(connection_socket, &esito, sizeof(int));
+			strcpy(esito, "1");
+			write(connection_socket, esito, 1);
 
 			// Copio l'username nella variabile dedicata all'utente connesso 
 			memcpy(current_user, username, sizeof(current_user));
 			printf ("Utente %s autenticato \n", current_user);
 
 			// Ciclo per menu principale
-			scelta = 0;
+			strcpy(scelta, "0");
 			while(1) 
 			{
 				printf("Pronto\n");
-				read(connection_socket,	&scelta, sizeof(int));
-				printf("Scelta effettuata: %d \n", scelta);
-
-				if (scelta == 1)
+				read(connection_socket,	scelta, 1);
+				printf("Scelta effettuata: %s \n", scelta);
+				
+				if (strcmp(scelta, "1") == 0)
 				{
 					printf("Messaggi ricevuti\n");
 					getMessagesByUser(connection_socket);
 				}
-				else if (scelta == 2)
+				else if (strcmp(scelta, "2") == 0)
 				{
 					printf("Invia messaggio\n");
 					sendMessage(connection_socket);
 				}
-				else if (scelta == 3) {
+				else if (strcmp(scelta, "3") == 0) {
 					printf("Elimina messaggi\n");
 					delMessage(connection_socket);
-				} if (scelta == 4) {
+				} 
+				else if (strcmp(scelta, "4") == 0) {
 					printf("Chiusura connessione \n");
 					break;
 				}
-				scelta = 0;
+				strcpy(scelta, "0");
 			}
 			close(connection_socket);
 			exit(EXIT_SUCCESS);
@@ -204,13 +212,15 @@ int registerUser(char *username, char *password) {
 		tokens = strtok(line ,"~");
 
 		if( strcmp( tokens, username) == 0) {    
-			printf("Utente gi� presente\n");
+			printf("Utente gia presente\n");
 			return 0;
 		}
 	}
 	printf("#### sto registrando %s ####", toWrite);
 
 	fprintf (list_ptr, "%s", toWrite); 
+
+	fclose(list_ptr);
 
 	printf("Registrazione completata\n");
 	return 1;
@@ -246,7 +256,7 @@ int requestLogin(char *username, char *password) {
 		}
 	
 	}
-
+	fclose(list_ptr);
 
 	printf("Utente non trovato \n");
 	return 0;
@@ -254,35 +264,40 @@ int requestLogin(char *username, char *password) {
 
 // Invio messaggio
 void sendMessage(int socket_to) { 
+	int next_id = -1;
 	FILE *msg_ptr;
 	messaggio msg;
-	int esito = 1;
+	char esito[2];
+	strcpy(esito, "1");
 
 	// Apro il file che contiene i messaggi
 	msg_ptr = fopen("messages.dat", "a");
 	if (!msg_ptr) { 
 		printf("Impossibile aprire messages.dat \n");
-		esito = 0;
-		write(socket_to, &esito, sizeof(int));
+		strcpy(esito, "0");
+		write(socket_to, esito, 1);
 		return;
 	}
 
 	// Ottengo il messaggio dal client ed ottengo il primo ID libero
-	msg = structFromRead(socket_to);
-	if ( (msg.id_messaggio = query_id()) == -1 ) {
+	read(socket_to, &msg, sizeof(msg));
+
+	if ( (next_id = query_id()) == -1 ) {
 		printf("Impossibile ottenere l'ID da inserire. Messaggio annullato.\n");
-		esito = 0;
-		write(socket_to, &esito, sizeof(int));
+		strcpy(esito, "0");
+		write(socket_to, esito, 1);
 		return;
 	}
+	
+	snprintf(msg.id_messaggio, 4, "%d", next_id);
 
 	// Scrivo il messaggio nel file
-	printf("Id impostato: %d \n", msg.id_messaggio);
+	printf("Id impostato: %s \n", msg.id_messaggio);
 	if (!fwrite (&msg, sizeof(messaggio), 1, msg_ptr) ) {
-		esito = 0;
+		strcpy(esito, "0");
 	}
 
-	write(socket_to, &esito, sizeof(int));
+	write(socket_to, esito, 1);
 
 	fclose(msg_ptr);
 	return;
@@ -291,12 +306,14 @@ void sendMessage(int socket_to) {
 // Elimino messaggio
 void delMessage(int socket_to) {
 	
-	int esito = 1;
-	int remove_id;
+	char esito[2];
+	strcpy(esito, "1");
+
+	char remove_id[4];
 	// Ottengo tutti i messaggi ricevuti per far scegliere all'utente cosa eliminare
 	getMessagesByUser(socket_to);
 
-	read(socket_to, &remove_id, sizeof(int));
+	read(socket_to, remove_id, 4);
 
 	FILE *actual_file_ptr;
 	FILE *new_file_ptr;
@@ -306,8 +323,8 @@ void delMessage(int socket_to) {
 	actual_file_ptr = fopen("messages.dat", "r");
 	if (!actual_file_ptr) {
 		printf("Impossibile aprire il file di messaggi \n");
-		esito = 0;
-		write(socket_to, &esito, sizeof(int));
+		strcpy(esito, "0");
+		write(socket_to, esito, 1);
 		return;
 	}
 
@@ -315,14 +332,14 @@ void delMessage(int socket_to) {
 	new_file_ptr = fopen("temp.dat", "w");
 	if (!new_file_ptr) {
 		printf("Impossibile creare il file temporaneo\n");
-		esito = 0;
-		write(socket_to, &esito, sizeof(int));
+		strcpy(esito, "0");
+		write(socket_to, esito, 1);
 		return;
 	}
-
+	
 	// Ricopio tutti i messaggi da messages.dat a temp.dat ad eccezione di quello da eliminare
 	while(fread(&msg, sizeof(messaggio), 1, actual_file_ptr)) {
-		if ( (strcmp(msg.destinatario, current_user) == 0) && (msg.id_messaggio == remove_id) )	{
+		if ( (strcmp(msg.destinatario, current_user) == 0) && (strcmp(msg.id_messaggio, remove_id) == 0))	{
 			printf("Record marcato per eliminazione \n");
 		} else {
 			fwrite (&msg, sizeof(messaggio), 1, new_file_ptr); 
@@ -336,7 +353,7 @@ void delMessage(int socket_to) {
 	remove("messages.dat");
 	rename("temp.dat", "messages.dat");
 	
-	write(socket_to, &esito, sizeof(int));
+	write(socket_to, esito, 1);
 
 	return;
 
@@ -348,15 +365,16 @@ void getMessagesByUser(int socket_to) {
 	messaggio msg;
 	FILE *msg_list_ptr;
 
-	int next_message = 0;
+	char next_message[2];
+	strcpy(next_message, "0");
 
 	// Apro in lettura il file dei messaggi 
 	msg_list_ptr = fopen("messages.dat", "r");
 	if ( !msg_list_ptr )  
 	{
 		printf("Impossibile aprire il file di messaggi \n");
-		next_message = 0;
-		write(socket_to, &next_message, sizeof(int));
+		strcpy(next_message, "0");
+		write(socket_to, next_message, 1);
 		return;
 	}
 
@@ -367,44 +385,20 @@ void getMessagesByUser(int socket_to) {
 		if (strcmp(msg.destinatario, current_user) == 0)
 		{
 			// Avviso il client di un nuovo messaggio in arrivo e lo invio
-			next_message = 1;
-			write(socket_to, &next_message, sizeof(int));
-			writeFromStruct(socket_to, msg);
+			strcpy(next_message, "1");
+			write(socket_to, next_message, 1);
+			write(socket_to, &msg, sizeof(msg));
 		}
 	}
 
-	next_message = 0;
-	write(socket_to, &next_message, sizeof(int));
+	strcpy(next_message, "0");
+	write(socket_to, next_message, 1);
 	fclose(msg_list_ptr);
 
 	return;
 }
 
 /* Funzioni di appoggio */
-
-// Costruisco una struct contenente un messaggio da una sequenza di letture dal client
-messaggio structFromRead(int write_socket)
-{
-	messaggio msg;
-	msg.id_messaggio = 0;
-
-	read(write_socket, &msg.id_messaggio, sizeof(int));
-	read(write_socket, msg.mittente, 32);
-	read(write_socket, msg.destinatario, 32);
-	read(write_socket, msg.oggetto, 64);
-	read(write_socket, msg.testo, 2048);
-	return msg;
-}
-
-// Invio una serie di informazioni al client partendo da una struct contenente un messaggio
-void writeFromStruct(int write_socket, messaggio msg)
-{
-	write(write_socket, &msg.id_messaggio, sizeof(int));	
-	write(write_socket, msg.mittente, 32);
-	write(write_socket, msg.destinatario, 32);
-	write(write_socket, msg.oggetto, 64);
-	write(write_socket, msg.testo, 2048);
-}
 
 // Ottengo il primo ID disponibile per l'utilizzo 
 int query_id()
@@ -431,10 +425,16 @@ int query_id()
 	fseek(msg_list_ptr, 0, SEEK_SET); 
 	while(fread(&msg, sizeof(messaggio), 1, msg_list_ptr))
 	{
-		id = msg.id_messaggio + 1;
+		id = atoi(msg.id_messaggio) + 1;
 	}
 
 	fclose(msg_list_ptr);
 
 	return id;
+}
+
+void sigpipeHandler()
+{
+	printf("\nConnection lost\n");
+	exit(EXIT_FAILURE);
 }

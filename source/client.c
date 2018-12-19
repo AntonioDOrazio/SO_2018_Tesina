@@ -5,11 +5,11 @@
 #include <sys/types.h>
 #include <arpa/inet.h> 
 #include <unistd.h>
-
+#include <signal.h>
 
 typedef struct messaggio messaggio;
 struct messaggio {
-	int id_messaggio;
+	char id_messaggio[4];
 	char mittente[32];
 	char destinatario[32];
 	char oggetto[64];
@@ -23,6 +23,7 @@ void inviaMessaggio();
 void eliminaMessaggio();
 struct messaggio structFromRead(int write_socket);
 
+void sigpipeHandler();
 
 int conn_socket; 
 char active_user[32];
@@ -66,54 +67,83 @@ int main(int argc, char *argv[])
 		exit (EXIT_FAILURE);
 	}
 
+
+
+
+
+	struct sigaction action;
+	sigset_t set;
+	sigfillset(&set);
+	action.sa_sigaction = sigpipeHandler;     // handler è la funzione a cui va il controllo
+	action.sa_mask = set;
+	action.sa_flags = 0;
+
+	sigaction(SIGPIPE, &action, NULL);
+
+
+
+
+
+
+
+
+
+
 	printf("############ SCAMBIO DI MESSAGGI - Client ############\n\n");
 	int auth = 0;
-	int scelta = 0;
+	char scelta[2];
+	strcpy(scelta, "0");
 
 	// Ciclo per autenticazione/registrazione
 	while (!auth) {
 		printf("Accedi: 1\nRegistrati: 2\n>> ");
 
-		scanf("%d", &scelta);
+		scanf("%s", scelta);
 
-		if ( (scelta != 1 ) && (scelta != 2) )
+		printf("La scelta è %s", scelta);
+
+		if ((strcmp(scelta, "1") != 0) && (strcmp(scelta, "2") != 0)) 
 			continue;
 
-		write(conn_socket, &scelta, sizeof(int));
+		write(conn_socket, scelta, 1);
+		printf("ho scritto - %s -", scelta);
 
-		if (scelta == 1) {
+
+		if ( strcmp(scelta, "1") == 0 ) {
 			auth = eseguiLogin();
-		} else if (scelta == 2) {
+		} else if ( strcmp(scelta, "2") == 0 ) {
 			auth = registrazione();
 	 	}
 	}
 
 	// Menu principale
-	scelta = 0;
-	while (scelta != 4)
+	strcpy(scelta, "0");
+	while ( strcmp(scelta, "4") != 0 )
 	{
+		strcpy(scelta, "0");
 		printf("\nPrego selezionare un'operazione\n");
 		printf("1 - Messaggi ricevuti\n");
 		printf("2 - Invia un messaggio\n");
 		printf("3 - Elimina dei messaggi ricevuti\n");
 		printf("4 - Esci dall'applicazione\n");
 		printf("\n>> ");
-		scanf("%d", &scelta);
+		scanf("%s", scelta);
 
-		if (scelta > 4) 
+		if ((strcmp(scelta, "1") != 0) && (strcmp(scelta, "2") != 0) && (strcmp(scelta, "3") != 0) && (strcmp(scelta, "4") != 0))
 			continue;
 
-		write(conn_socket, &scelta, sizeof(int));
+		write(conn_socket, scelta, 1);
 
-		if (scelta == 1)
+		
+		if (strcmp(scelta, "1") == 0)
 		{
 			messaggiRicevuti();
 		}
-		else if (scelta == 2)
+		else if (strcmp(scelta, "2") == 0)
 		{
 			inviaMessaggio();
 		}
-		else if (scelta == 3) 
+		else if (strcmp(scelta, "3") == 0)
 		{
 			eliminaMessaggio();
 		} 
@@ -128,7 +158,8 @@ int registrazione()
 { 
 	char username[32];
 	char password[32];
-	int esito = 0;
+	char esito[2];
+	strcpy(esito, "0");
 
 	// Invio al server username e password
 	printf("Inserire username: ");
@@ -138,16 +169,18 @@ int registrazione()
 	scanf("%s", password);
 	write(conn_socket, password, 32);
 
-	read(conn_socket, &esito, sizeof(int)); 
+	read(conn_socket, esito, 1); 
+	printf("l'esito - %s -", esito);
 
-	if (esito) {
+	if (strcmp(esito, "1") == 0) {
 		printf("Registrazione completata\n ");			
 		printf("\nBenvenuto %s\n", username);
 		memcpy(active_user, username, 32);
+		return 1;
 	} else {
 		printf("Impossibile completare la registrazione\n");
+		return 0;
 	}
-	return esito;
 
 }
 
@@ -156,7 +189,8 @@ int eseguiLogin()
 {
 	char username[32];
 	char password[32];
-	int esito = 0;
+	char esito[2];
+	strcpy(esito, "0");
 	
 	// Invio al server username e password
 	printf("Inserire username: ");
@@ -166,36 +200,39 @@ int eseguiLogin()
 	scanf ("%s", password);
 	write(conn_socket, password, 32);
 
-
 	// Richiedo l'esito
+	read(conn_socket, esito, 1);
 
-	read(conn_socket, &esito, sizeof(int));
+	printf("ESITO: %s", esito);
 
-	if (esito){
+	if (strcmp(esito, "1") == 0){
 		printf("\nBenvenuto %s\n", username);
 		// Autenticazione effettuata
 		memcpy(active_user, username, 32);
+		return 1;
 	}
 	else {
 		printf("Impossiile eseguire il login \n");
+		return 0;
 	}
-	return esito;
 }
 
 // Visualizzo tutti i messaggi ricevuti da un utente
 void messaggiRicevuti()
 {
-	int next_message = 1;
+	char next_message[2];
+	strcpy(next_message, "1");
 	messaggio msg;
-	read(conn_socket, &next_message, sizeof(int));
-	while(next_message != 0){
-		msg = structFromRead(conn_socket);
+	read(conn_socket, next_message, 1);
+
+	while( strcmp(next_message, "0") != 0 ) {
+		read(conn_socket, &msg, sizeof(msg));
 		printf("\n## MESSAGGIO ##\n");
-		printf("ID\n   %d\n", msg.id_messaggio);
+		printf("ID\n   %s\n", msg.id_messaggio);
 		printf("Destinatario:\n   %s\n",msg.destinatario);
 		printf("Oggetto:\n   %s\n", msg.oggetto);
 		printf("Testo:\n   %s\n", msg.testo);
-		read(conn_socket, &next_message, sizeof(int));
+		read(conn_socket, next_message, 1);
 
 	}
 	
@@ -204,10 +241,12 @@ void messaggiRicevuti()
 // Invio un nuovo messaggio al destinatario scelto
 void inviaMessaggio() 
 {
-	int esito = 0;
+	char esito[2];
+	strcpy(esito, "0");
+
 	messaggio msg;
 
-	msg.id_messaggio = 0;
+	strcpy(msg.id_messaggio, "0");
 	printf("Inserisci il destinatario \n");
 	scanf(" %49[^\n]", msg.destinatario);
 	printf("Inserisci oggetto \n");
@@ -215,15 +254,13 @@ void inviaMessaggio()
 	printf("Inserisci testo \n");
 	scanf(" %49[^\n]", msg.testo);
 
-	write(conn_socket, &msg.id_messaggio, sizeof(int));
-	write(conn_socket, active_user, 32);
-	write(conn_socket, msg.destinatario, 32);
-	write(conn_socket, msg.oggetto, 64);
-	write(conn_socket, msg.testo, 2048);
+	memcpy(msg.mittente, active_user, 32);
 
-	read(conn_socket, &esito, sizeof(int));
+	write(conn_socket, &msg, sizeof(msg));
 
-	if (esito){
+	read(conn_socket, esito, 1);
+
+	if ( strcmp(esito, "1") == 0 ){
 		printf("Messaggio inviato correttamente\n");
 	}
 	else {
@@ -235,18 +272,22 @@ void inviaMessaggio()
 // Elimino un messaggio ricevuto dato l'ID inserito
 void eliminaMessaggio()
 {
-	int id_msg = -1;
-	int esito = 0;
+	char id_msg[4];
+	char esito[2];
+
+	strcpy(id_msg, "-1");
+	strcpy(esito, "0");
+
 	messaggiRicevuti();
 
 	printf("Quale messaggio vuoi eliminare? Inserisci l'ID \n>> ");
 
-	scanf("%d", &id_msg);
-	write(conn_socket, &id_msg, sizeof(int));
+	scanf("%s", id_msg);
+	write(conn_socket, id_msg, 4);
 	
-	read(conn_socket, &esito, sizeof(int));
+	read(conn_socket, esito, 1);
 	
-	if (esito) {
+	if ( strcmp(esito, "1") == 0 ) {
 		printf ("Messaggio eliminato \n");
 	} else {
 		printf ("Impossibile eliminare il messaggio\n");
@@ -255,17 +296,7 @@ void eliminaMessaggio()
 
 /* Funzioni di appoggio */
 
-// Costruisco una struct contenente un messaggio da una sequenza di letture dal client
-messaggio structFromRead(int write_socket)
-{
-	messaggio msg;
-	msg.id_messaggio = 0;
-
-	read(write_socket, &msg.id_messaggio, sizeof(int));
-	read(write_socket, msg.mittente, 32);
-	read(write_socket, msg.destinatario, 32);
-	read(write_socket, msg.oggetto, 64);
-	read(write_socket, msg.testo, 2048);
-	
-	return msg;
+void sigpipeHandler() {
+	printf("\nErrore: server disconnesso. Il programma verra chiuso\n");
+	exit(EXIT_FAILURE);
 }
